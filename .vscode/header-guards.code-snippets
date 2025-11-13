@@ -1,0 +1,38 @@
+{
+  "C/C++ Header with include guard (project style)": {
+    "scope": "c,cpp",
+    "prefix": "hguard",
+    "body": [
+      "#ifndef MARKET_DATA_SYSTEM_${TM_FILENAME_BASE/(.*)/${1:/upcase}/}_H",
+      "#define MARKET_DATA_SYSTEM_${TM_FILENAME_BASE/(.*)/${1:/upcase}/}_H",
+      "",
+      "$0",
+      "",
+      "#endif // MARKET_DATA_SYSTEM_${TM_FILENAME_BASE/(.*)/${1:/upcase}/}_H"
+    ],
+    "description": "Create header with include guard using MARKET_DATA_SYSTEM_<FILENAME>_H"
+  },
+  "C/C++ Header with path-based guard (project style)": {
+    "scope": "c,cpp",
+    "prefix": "hguardpath",
+    "body": [
+      "#ifndef MARKET_DATA_SYSTEM_${TM_FILENAME_BASE/(.*)/${1:/upcase}/}_H",
+      "#define MARKET_DATA_SYSTEM_${TM_FILENAME_BASE/(.*)/${1:/upcase}/}_H",
+      "",
+      "$0",
+      "",
+      "#endif // MARKET_DATA_SYSTEM_${TM_FILENAME_BASE/(.*)/${1:/upcase}/}_H"
+    ],
+    "description": "Include guard using MARKET_DATA_SYSTEM_<FILENAME>_H (path-based transforms are limited)"
+  },
+  "C/C++ Header with pragma once": {
+    "scope": "c,cpp",
+    "prefix": "hpragma",
+    "body": [
+      "#pragma once",
+      "",
+      "$0"
+    ],
+    "description": "Header with #pragma once"
+  }
+}

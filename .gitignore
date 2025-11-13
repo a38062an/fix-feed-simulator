@@ -1,0 +1,15 @@
+# Build directories
+/build/
+/cmake-build-debug/
+
+# VS Code
+/.vscode/
+
+# macOS
+.DS_Store
+
+# Compiled objects
+*.o
+*.obj
+*.exe
+*.out
