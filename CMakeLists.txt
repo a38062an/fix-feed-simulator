@@ -1,61 +1,68 @@
-cmake_minimum_required(VERSION 4.0)
-
-# Project declaration: we build both C and C++ sources. Declaring CXX
-# enables CMake's C++ support.
+cmake_minimum_required(VERSION 3.16)
 project(market_data_system LANGUAGES C CXX)
 
 # ---------------------------------------------------------------------------
-# Basic language standards and flags
+# Compiler settings
 # ---------------------------------------------------------------------------
-# Keep C settings (project uses a small C API in headers)
 set(CMAKE_C_STANDARD 11)
-
-# Use C++20 for the C++ sources (required for std::span, concepts, etc.)
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
-# Export compile commands (compile_commands.json) so tools like VS Code and
-# clangd can pick up the exact compile flags and include paths. This file is
-# generated in the build directory after configuration.
+# Generate compile_commands.json for clangd/IDE support
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
-# Set a sane default build type if the user didn't provide one.
-if(NOT CMAKE_BUILD_TYPE AND NOT CMAKE_CONFIGURATION_TYPES)
-  message(STATUS "No build type selected, default to Debug")
-  set(CMAKE_BUILD_TYPE "Debug" CACHE STRING "Build type" FORCE)
+# Default to Debug build if not specified
+if(NOT CMAKE_BUILD_TYPE)
+  set(CMAKE_BUILD_TYPE "Debug" CACHE STRING "Build type (Debug/Release)" FORCE)
 endif()
 
 # ---------------------------------------------------------------------------
-# Sources and target
+# Common settings
 # ---------------------------------------------------------------------------
-# We build a single executable from the main in `src/producer_main.cpp`.
-# Headers under `include/` are not compiled directly; instead we add the
-# directory to the target's include path so `#include <market/...>` works.
-set(SRC_FILES
-        src/producer_main.cpp
+set(INCLUDE_DIR ${CMAKE_SOURCE_DIR}/include)
+set(OUTPUT_DIR ${CMAKE_BINARY_DIR})
+
+# ---------------------------------------------------------------------------
+# Producer executable
+# ---------------------------------------------------------------------------
+add_executable(udp_sender
+    src/producer_main.cpp
 )
 
-add_executable(market_data_system ${SRC_FILES})
-
-# Make the project's `include/` directory available to the compiler. Using
-# target_include_directories keeps the include scope local to this target and
-# is preferred over the global include_directories() call.
-target_include_directories(market_data_system
-        PRIVATE
-                ${CMAKE_SOURCE_DIR}/include
+target_include_directories(udp_sender PRIVATE ${INCLUDE_DIR})
+set_target_properties(udp_sender PROPERTIES
+    RUNTIME_OUTPUT_DIRECTORY ${OUTPUT_DIR}
 )
 
-# You can add target_compile_definitions, link libraries, or other target
-# properties below. For example, if you later add a network library you can
-# link it with target_link_libraries(market_data_system PRIVATE <lib>).
+# ---------------------------------------------------------------------------
+# Packet analyzer executable (requires libpcap)
+# ---------------------------------------------------------------------------
+find_library(PCAP_LIBRARY NAMES pcap)
 
-# Optional: set output directory (keeps the binary in build/)
-set_target_properties(market_data_system PROPERTIES
-        RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}
+if(NOT PCAP_LIBRARY)
+    message(WARNING "libpcap not found - packet_analyzer will not link")
+endif()
+
+add_executable(packet_analyzer 
+    src/analyzer_main.cpp
 )
 
-# Helpful status message when configuring
-message(STATUS "Configured project '${PROJECT_NAME}'")
-message(STATUS "C++ standard: ${CMAKE_CXX_STANDARD}")
-message(STATUS "Include dir: ${CMAKE_SOURCE_DIR}/include")
+target_include_directories(packet_analyzer PRIVATE ${INCLUDE_DIR})
+set_target_properties(packet_analyzer PROPERTIES 
+    RUNTIME_OUTPUT_DIRECTORY ${OUTPUT_DIR}
+)
+
+if(PCAP_LIBRARY)
+    target_link_libraries(packet_analyzer PRIVATE ${PCAP_LIBRARY})
+endif()
+
+# ---------------------------------------------------------------------------
+# Status output
+# ---------------------------------------------------------------------------
+message(STATUS "Build type: ${CMAKE_BUILD_TYPE}")
+message(STATUS "C++ standard: C++${CMAKE_CXX_STANDARD}")
+message(STATUS "Include directory: ${INCLUDE_DIR}")
+if(PCAP_LIBRARY)
+    message(STATUS "libpcap: ${PCAP_LIBRARY}")
+endif()

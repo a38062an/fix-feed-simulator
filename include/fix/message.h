@@ -72,10 +72,10 @@ public:
         unsigned int checkSum = sum % 256;
 
         // Append Tag for example: "10=021<SOH>"
-        // Append "10=XXX<SOH>"
+        // Append "10=XXX<SOH>" — include the '=' after the tag number
         std::format_to(
             std::back_inserter(finalMessageBuffer_),
-            "10{:03}{}", // :03 makes 0 the fill number
+            "10={:03}{}", // include '=' and :03 zero-pads to width 3
             checkSum,
             SOH);
 
