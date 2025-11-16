@@ -1,7 +1,7 @@
 //
 // Created by Anthony Nguyen on 13/11/2025.
 //
-#include "market/price_generator.h"
+#include <market/price_generator.h>
 #include <random>
 
 #ifndef MARKET_DATA_SYSTEM_RANDOM_WALK_GENERATOR_H
@@ -13,10 +13,10 @@ class RandomWalkGenerator : public IPriceGenerator<PriceType>
 {
 public:
     RandomWalkGenerator(PriceType startPrice, PriceType stepSize)
-        : currentPrice_(startPrice),
-          stepSize_(std::abs(stepSize)),
-          rngEngine_(randomDevice_()),
-          normalDistribution_(0.0, 1.0)
+        : currentPrice_{startPrice},
+          stepSize_{std::abs(stepSize)},
+          rngEngine_{randomDevice_()},
+          normalDistribution_{0.0, 1.0}
     {
     }
 
