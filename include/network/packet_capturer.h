@@ -97,10 +97,24 @@ public:
         pcap_loop(pcapHandle_.get(), -1, pcapCallback, reinterpret_cast<u_char *>(this));
     }
 
+    /**
+     * @brief C++ internal packet handler, called by the pcap_loop C-style trampoline.
+     *
+     * [ ETHERNET (14) | IP (Variable) | UDP (8) | PAYLOAD (Your FIX) ]
+     *
+     * @param header A pointer to the pcap packet header, which contains
+     * metadata like the captured length (`caplen`). This is used
+     * to prevent buffer overruns on truncated packets.
+     * @param packetData A pointer to the raw byte buffer of the captured
+     * packet, starting from the Ethernet (Layer 2) header.
+     */
     void handlePacket(const struct pcap_pkthdr *header, const u_char *packetData)
     {
         const u_char *ipPacket = packetData + 14;
+
+        // Extract IHL Field that stores n.o 32 bit words, doing * 4 will find total n.o bits -> size of ip header
         uint8_t ipHeaderLength = (*ipPacket & 0x0F) * 4;
+
         const u_char *udpPacket = ipPacket + ipHeaderLength;
         const u_char *payload = udpPacket + 8;
 
