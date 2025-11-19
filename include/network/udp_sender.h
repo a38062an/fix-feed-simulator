@@ -43,6 +43,14 @@ public:
             throw std::runtime_error("Failed to set SO_REUSEADDR");
         }
 
+        // Increase kernel send buffer
+        int sendBufferSize = 4 * 1024 * 1024;
+        if (setsockopt(sockfd_, SOL_SOCKET, SO_SNDBUF, &sendBufferSize, sizeof(sendBufferSize)) < 0)
+        {
+            std::cerr << "Warning: Could not increase socket buffer size. "
+                      << "You might see packet drops under load." << std::endl;
+        }
+
         // 3. Setup the destination address structure (UPDATING PROPERTIES OF addr_)
         std::memset(&addr_, 0, sizeof(addr_)); // Zero out addr_
         addr_.sin_family = AF_INET;            // We are using IPv4
@@ -68,7 +76,17 @@ public:
         // Error handling
         if (bytesSent < 0)
         {
-            std::cerr << "sendto failed: " << std::strerror(errno) << std::endl;
+            // Check specifically for "Buffer Full" errors (ENOBUFS)
+            if (errno == ENOBUFS || errno == EAGAIN || errno == EWOULDBLOCK)
+            {
+                // THROW exception so the caller can catch it and retry!
+                throw std::runtime_error("ENOBUFS");
+            }
+            else
+            {
+                // Hard error (bad network, bad address, etc.) - Just print
+                std::cerr << "sendto failed: " << std::strerror(errno) << std::endl;
+            }
         }
         // Partial packet send
         else if (bytesSent != static_cast<ssize_t>(data.size()))

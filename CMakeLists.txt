@@ -1,68 +1,45 @@
-cmake_minimum_required(VERSION 3.16)
-project(market_data_system LANGUAGES C CXX)
+cmake_minimum_required(VERSION 3.20)
+project(MarketDataSystem)
 
-# ---------------------------------------------------------------------------
-# Compiler settings
-# ---------------------------------------------------------------------------
-set(CMAKE_C_STANDARD 11)
 set(CMAKE_CXX_STANDARD 20)
-set(CMAKE_CXX_STANDARD_REQUIRED ON)
-set(CMAKE_CXX_EXTENSIONS OFF)
 
-# Generate compile_commands.json for clangd/IDE support
-set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
+# --- 1. Dependencies ---
+find_package(Threads REQUIRED)
 
-# Default to Debug build if not specified
-if(NOT CMAKE_BUILD_TYPE)
-  set(CMAKE_BUILD_TYPE "Debug" CACHE STRING "Build type (Debug/Release)" FORCE)
-endif()
-
-# ---------------------------------------------------------------------------
-# Common settings
-# ---------------------------------------------------------------------------
-set(INCLUDE_DIR ${CMAKE_SOURCE_DIR}/include)
-set(OUTPUT_DIR ${CMAKE_BINARY_DIR})
-
-# ---------------------------------------------------------------------------
-# Producer executable
-# ---------------------------------------------------------------------------
-add_executable(udp_sender
-    src/producer_main.cpp
-)
-
-target_include_directories(udp_sender PRIVATE ${INCLUDE_DIR})
-set_target_properties(udp_sender PROPERTIES
-    RUNTIME_OUTPUT_DIRECTORY ${OUTPUT_DIR}
-)
-
-# ---------------------------------------------------------------------------
-# Packet analyzer executable (requires libpcap)
-# ---------------------------------------------------------------------------
+# Find PCAP (Networking)
 find_library(PCAP_LIBRARY NAMES pcap)
-
 if(NOT PCAP_LIBRARY)
-    message(WARNING "libpcap not found - packet_analyzer will not link")
+    message(WARNING "libpcap not found - networking features may fail to link")
 endif()
 
-add_executable(packet_analyzer 
-    src/analyzer_main.cpp
-)
+# --- 2. Include Directories ---
+include_directories(include)
 
-target_include_directories(packet_analyzer PRIVATE ${INCLUDE_DIR})
-set_target_properties(packet_analyzer PROPERTIES 
-    RUNTIME_OUTPUT_DIRECTORY ${OUTPUT_DIR}
-)
+# --- 3. EXECUTABLES ---
 
+# UDP senders: GBM and RandomWalk variants only
+add_executable(udp_sender_gbm src/producer_gbm.cpp)
+if(PCAP_LIBRARY)
+    target_link_libraries(udp_sender_gbm PRIVATE ${PCAP_LIBRARY})
+endif()
+
+add_executable(udp_sender_rw src/producer_rw.cpp)
+if(PCAP_LIBRARY)
+    target_link_libraries(udp_sender_rw PRIVATE ${PCAP_LIBRARY})
+endif()
+
+# B. The Packet Analyzer (Console)
+add_executable(packet_analyzer src/analyzer_main.cpp)
 if(PCAP_LIBRARY)
     target_link_libraries(packet_analyzer PRIVATE ${PCAP_LIBRARY})
 endif()
 
-# ---------------------------------------------------------------------------
-# Status output
-# ---------------------------------------------------------------------------
-message(STATUS "Build type: ${CMAKE_BUILD_TYPE}")
-message(STATUS "C++ standard: C++${CMAKE_CXX_STANDARD}")
-message(STATUS "Include directory: ${INCLUDE_DIR}")
-if(PCAP_LIBRARY)
-    message(STATUS "libpcap: ${PCAP_LIBRARY}")
-endif()
+# C. Tests & Benchmarks
+add_executable(stress_test_integration tests/stress_test_integration.cpp)
+target_link_libraries(stress_test_integration pthread)
+
+add_executable(stress_test_jitter tests/stress_test_jitter.cpp)
+target_link_libraries(stress_test_jitter pthread)
+
+add_executable(benchmark_throughput tests/benchmark_throughput.cpp)
+target_link_libraries(benchmark_throughput pthread)

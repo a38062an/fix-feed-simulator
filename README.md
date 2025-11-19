@@ -44,75 +44,145 @@ For optimized release build:
 
 ```bash
 cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
-cmake --build build -j
+# Market Data System
+
+Low-latency market data capture and analysis system for processing FIX protocol messages over UDP multicast.
+
+## Overview
+
+This project provides two main components:
+
+- `packet_analyzer` — captures UDP packets and extracts FIX market data.
+- `udp_sender_gbm` and `udp_sender_rw` — two explicit UDP senders for testing:
+ - `udp_sender_gbm` uses a Geometric Brownian Motion price generator.
+ - `udp_sender_rw` uses a Random Walk price generator.
+
+The system uses `libpcap` for packet capture and processes Ethernet/IP/UDP to extract application-layer FIX messages.
+
+## Requirements
+
+- C++20 compatible compiler (GCC 10+, Clang 12+)
+- CMake 3.20 or higher
+- libpcap development headers
+- Python 3 (optional, for the dashboard)
+ - `matplotlib` (if you run `dashboard.py`)
+
+### Install Dependencies
+
+**Ubuntu / Debian**
+
+```bash
+sudo apt-get install libpcap-dev build-essential cmake python3 python3-venv
+python3 -m pip install --user matplotlib
 ```
+
+**macOS**
+
+```bash
+brew install libpcap cmake python
+python3 -m pip install --user matplotlib
+```
+
+## Building
+
+Configure and build:
+
+```bash
+cmake -S . -B build
+cmake --build build -- -j$(nproc || sysctl -n hw.ncpu)
+```
+
+For a release build:
+
+```bash
+cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
+cmake --build build -- -j$(nproc || sysctl -n hw.ncpu)
+```
+
+Produced executables (in `build/`):
+
+- `packet_analyzer`
+- `udp_sender_gbm`
+- `udp_sender_rw`
 
 ## Running
 
-### Start the Packet Analyzer
+### Packet analyzer
 
-The analyzer requires raw socket access and typically needs elevated privileges:
+Requires raw socket access on most systems:
 
 ```bash
 sudo ./build/packet_analyzer
 ```
 
-### Send Test Data
+### UDP senders (test data)
 
-In a separate terminal, run the UDP sender:
+Run a sender in a separate terminal:
 
 ```bash
-./build/udp_sender
+./build/udp_sender_gbm   # GBM generator
+./build/udp_sender_rw    # Random walk generator
 ```
 
-The sender broadcasts FIX market data snapshots to the configured multicast address. The analyzer will capture and display the parsed messages.
+Both senders broadcast FIX market data to `239.255.1.1:9999` by default.
 
-## FIX Message Format
+### Dashboard (optional)
 
-The system handles FIX 4.2 Market Data Snapshot messages (MsgType=W):
+Use the included Python dashboard to visualize feed data:
 
-| Tag | Field           | Example     | Description                    |
-|-----|-----------------|-------------|--------------------------------|
-| 8   | BeginString     | FIX.4.2     | Protocol version               |
-| 9   | BodyLength      | 75          | Message body length in bytes   |
-| 35  | MsgType         | W           | Market Data Snapshot           |
-| 55  | Symbol          | ESZ5        | Instrument identifier          |
-| 268 | NoMDEntries     | 2           | Number of market data entries  |
-| 269 | MDEntryType     | 0           | 0=Bid, 1=Offer                 |
-| 270 | MDEntryPx       | 99.78       | Price                          |
-| 271 | MDEntrySize     | 100         | Quantity                       |
-| 10  | CheckSum        | 009         | Message integrity check        |
+```bash
+# start a sender first
+python3 dashboard.py
+```
 
-## Project Structure
+Install `matplotlib` if required.
+
+## FIX message format
+
+The project produces and consumes FIX 4.2 Market Data Snapshot messages (MsgType = W). Key tags:
+
+- `8`  BeginString (FIX.4.2)
+- `35` MsgType (W)
+- `55` Symbol (e.g., ESZ5)
+- `268` NoMDEntries
+- `269` MDEntryType (0=Bid, 1=Offer)
+- `270` MDEntryPx (price)
+- `271` MDEntrySize (quantity)
+
+## Project layout
 
 ```
 market-data-system/
-├── include/
-│   └── market/
-│       └── PacketCapturer.h    # Packet capture wrapper
+├── include/                # headers (core helpers, generators)
 ├── src/
-│   ├── analyzer_main.cpp       # Packet analyzer entry point
-│   └── producer_main.cpp       # UDP sender entry point
+│   ├── analyzer_main.cpp
+│   ├── producer_gbm.cpp
+│   └── producer_rw.cpp
+├── tests/                  # stress/benchmarks
+├── dashboard.py            # optional Python visualizer
 ├── CMakeLists.txt
 └── README.md
 ```
 
+## Notes
+
+- The repository now exposes two explicit UDP senders; there is no single generic `udp_sender` target.
+- To restore any deleted legacy files, run:
+
+```bash
+git checkout -- include/market/market_data_system.h src/producer_main.cpp src/main.cpp
+```
+
 ## Development
 
-After modifying source files, rebuild with:
+After source changes run:
 
 ```bash
-cmake --build build
+cmake --build build -- -j$(nproc || sysctl -n hw.ncpu)
 ```
 
-Only re-run the configure step if CMakeLists.txt changes:
-
-```bash
-cmake -S . -B build
-```
-
-The build generates `compile_commands.json` for IDE and clangd integration.
+Run `cmake -S . -B build` only when `CMakeLists.txt` changes.
 
 ## License
 
-See LICENSE file for details.
+See `LICENSE` for details.

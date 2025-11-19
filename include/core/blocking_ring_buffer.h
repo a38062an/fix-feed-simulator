@@ -87,6 +87,21 @@ public:
         return true;
     }
 
+    // --- GUI helpers ---
+    float getLoadFactor()
+    {
+        std::lock_guard<std::mutex> lock(mtx_);
+        return (float)count_ / (float)Capacity;
+    }
+
+    size_t size()
+    {
+        std::lock_guard<std::mutex> lock(mtx_);
+        return count_;
+    }
+
+    size_t capacity() const { return Capacity; }
+
 private:
     std::array<T, Capacity>
         buffer_;
