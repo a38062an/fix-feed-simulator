@@ -1,85 +1,157 @@
 #include <iostream>
 #include <thread>
-#include <chrono>
-#include <vector>
 #include <atomic>
+#include <vector>
+#include <chrono>
 #include <iomanip>
+#include <memory> // For std::unique_ptr
 
-// Include your specific header
-#include <core/blocking_ring_buffer.h>
+// --- ARCHITECTURE SPECIFIC INTRINSICS ---
+#if defined(__x86_64__) || defined(_M_X64)
+#include <immintrin.h>
+#endif
 
-// 10 Million operations gives a stable average
-const int NUM_OPERATIONS = 10000000;
-const int BUFFER_CAPACITY = 4096;
+#include "../include/core/blocking_ring_buffer.h"
+#include "../include/core/nonblocking_ring_buffer.h"
 
-void run_benchmark()
+// --- CONSTANTS ---
+// 65536 is a standard HFT buffer size (2^16).
+// Large enough to absorb bursts, small enough to stay in L2/L3 cache.
+const size_t BUFFER_CAPACITY = 65536;
+const int ITERATIONS = 10'000'000;
+
+// A realistic 16-byte payload (Sequence ID + Timestamp)
+struct Order
 {
-    // Setup
-    BlockingRingBuffer<int, BUFFER_CAPACITY> queue;
+    uint64_t id;
+    uint64_t ts;
+};
 
+// --- CPU RELAX HELPER ---
+inline void cpu_relax()
+{
+#if defined(__x86_64__) || defined(_M_X64)
+    _mm_pause();
+#elif defined(__aarch64__) || defined(_M_ARM64)
+    asm volatile("yield");
+#else
+    std::this_thread::yield();
+#endif
+}
+
+// --- BLOCKING TEST ---
+double run_blocking(bool is_warmup)
+{
+    auto q = std::make_unique<BlockingRingBuffer<Order, BUFFER_CAPACITY>>();
     std::atomic<bool> start{false};
 
-    // We use std::vector to verify data integrity (optional, but good practice)
-    std::vector<int> received_data;
-    received_data.reserve(NUM_OPERATIONS);
+    // Adjust iterations for warmup
+    int count = is_warmup ? (ITERATIONS / 10) : ITERATIONS;
 
-    // --- PRODUCER THREAD ---
-    std::jthread producer([&]()
-                          {
-        // Spin until start signal (synchronizes the threads)
-        while (!start.load(std::memory_order_acquire)); 
-
-        for (int i = 0; i < NUM_OPERATIONS; ++i) {
-            // This line BLOCKS if buffer is full
-            // It incurs the cost of std::unique_lock + std::condition_variable
-            queue.push(i);
-        } });
-
-    // --- CONSUMER THREAD ---
-    std::jthread consumer([&]()
-                          {
+    std::thread consumer([&]()
+                         {
         while (!start.load(std::memory_order_acquire));
-
-        int val;
-        for (int i = 0; i < NUM_OPERATIONS; ++i) {
-            // This line BLOCKS if buffer is empty
-            queue.pop(val);
+        Order t;
+        for (int i = 0; i < count; ++i) {
+            q->pop(t); // Blocking wait internally
         } });
 
-    std::cout << "Threads ready. Starting race..." << std::endl;
+    std::thread producer([&]()
+                         {
+        while (!start.load(std::memory_order_acquire));
+        for (int i = 0; i < count; ++i) {
+            q->push({(uint64_t)i, 0}); // Blocking wait internally
+        } });
 
-    // START TIMING
-    auto start_time = std::chrono::high_resolution_clock::now();
-    start.store(true, std::memory_order_release); // Fire the starting gun
+    auto t1 = std::chrono::high_resolution_clock::now();
+    start.store(true, std::memory_order_release);
 
-    // Join threads (jthread joins automatically on destruction, but we do it explicitly to stop the clock)
     producer.join();
     consumer.join();
 
-    auto end_time = std::chrono::high_resolution_clock::now();
-    // END TIMING
+    auto t2 = std::chrono::high_resolution_clock::now();
 
-    // Calculations
-    auto duration_ns = std::chrono::duration_cast<std::chrono::nanoseconds>(end_time - start_time).count();
-    double seconds = duration_ns / 1e9;
-    double ops_per_sec = NUM_OPERATIONS / seconds;
+    double duration_sec = std::chrono::duration<double>(t2 - t1).count();
+    return count / duration_sec; // Ops per second
+}
 
-    std::cout << "\n--- RESULTS: BlockingRingBuffer ---" << std::endl;
-    std::cout << "Operations:  " << NUM_OPERATIONS << std::endl;
-    std::cout << "Time Taken:  " << std::fixed << std::setprecision(4) << seconds << "s" << std::endl;
-    std::cout << "Throughput:  " << (long)ops_per_sec << " ops/sec" << std::endl;
-    std::cout << "Avg Latency: " << (duration_ns / NUM_OPERATIONS) << " ns/op" << std::endl;
+// --- NON-BLOCKING TEST ---
+double run_nonblocking(bool is_warmup)
+{
+    auto q = std::make_unique<LockFreeRingBuffer<Order, BUFFER_CAPACITY>>();
+    std::atomic<bool> start{false};
+
+    int count = is_warmup ? (ITERATIONS / 10) : ITERATIONS;
+
+    std::thread consumer([&]()
+                         {
+        while (!start.load(std::memory_order_acquire));
+        Order t;
+        for (int i = 0; i < count; ++i) {
+            // Spin until we get data
+            while (!q->pop(t)) {
+                cpu_relax();
+            }
+        } });
+
+    std::thread producer([&]()
+                         {
+        while (!start.load(std::memory_order_acquire));
+        for (int i = 0; i < count; ++i) {
+            // Spin until we have space
+            while (!q->push({(uint64_t)i, 0})) {
+                cpu_relax();
+            }
+        } });
+
+    auto t1 = std::chrono::high_resolution_clock::now();
+    start.store(true, std::memory_order_release);
+
+    producer.join();
+    consumer.join();
+
+    auto t2 = std::chrono::high_resolution_clock::now();
+
+    double duration_sec = std::chrono::duration<double>(t2 - t1).count();
+    return count / duration_sec;
+}
+
+void print_result(const std::string &name, double ops_per_sec)
+{
+    std::cout << std::left << std::setw(20) << name
+              << " : " << std::fixed << std::setprecision(0)
+              << ops_per_sec << " ops/sec ("
+              << std::setprecision(2) << (ops_per_sec / 1'000'000.0) << " M/s)" << std::endl;
 }
 
 int main()
 {
-    try
-    {
-        run_benchmark();
-    }
-    catch (const std::exception &e)
-    {
-        std::cerr << "Test Failed: " << e.what() << std::endl;
-    }
+    std::cout << "--- THROUGHPUT BENCHMARK ---\n";
+    std::cout << "Payload: 16 Bytes | Capacity: " << BUFFER_CAPACITY << " | Iterations: " << ITERATIONS << "\n";
+    std::cout << "Architecture: "
+#if defined(__aarch64__) || defined(_M_ARM64)
+                 "ARM64 (Apple Silicon)"
+#else
+                 "x86_64"
+#endif
+              << "\n\n";
+
+    std::cout << "Warming up caches...\n";
+    run_blocking(true);
+    run_nonblocking(true);
+    std::cout << "Warmup complete. Starting Race.\n\n";
+
+    // Run Blocking
+    double block_res = run_blocking(false);
+    print_result("Blocking (Mutex)", block_res);
+
+    // Run Non-Blocking
+    double nonblock_res = run_nonblocking(false);
+    print_result("Lock-Free (Atomic)", nonblock_res);
+
+    // Calculate Improvement
+    double improvement = ((nonblock_res - block_res) / block_res) * 100.0;
+    std::cout << "\nImprovement: " << std::fixed << std::setprecision(2) << improvement << "%" << std::endl;
+
     return 0;
 }

@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.20)
-project(MarketDataSystem)
+project(FixFeedSimulator)
 
 set(CMAKE_CXX_STANDARD 20)
 
@@ -28,6 +28,17 @@ if(PCAP_LIBRARY)
     target_link_libraries(udp_sender_rw PRIVATE ${PCAP_LIBRARY})
 endif()
 
+# Non-blocking Market Data System (GBM) - new executable using the lock-free ring buffer
+add_executable(udp_sender_gbm_nonblocking src/producer_gbm_nonblocking.cpp)
+if(PCAP_LIBRARY)
+    target_link_libraries(udp_sender_gbm_nonblocking PRIVATE ${PCAP_LIBRARY})
+endif()
+
+# Non-blocking Market Data System (RandomWalk) - new executable using the lock-free ring buffer
+add_executable(udp_sender_rw_nonblocking src/producer_rw_nonblocking.cpp)
+if(PCAP_LIBRARY)
+    target_link_libraries(udp_sender_rw_nonblocking PRIVATE ${PCAP_LIBRARY})
+endif()
 # B. The Packet Analyzer (Console)
 add_executable(packet_analyzer src/analyzer_main.cpp)
 if(PCAP_LIBRARY)
@@ -43,3 +54,8 @@ target_link_libraries(stress_test_jitter pthread)
 
 add_executable(benchmark_throughput tests/benchmark_throughput.cpp)
 target_link_libraries(benchmark_throughput pthread)
+
+# Ring buffer stress test
+# Latency benchmark
+add_executable(latency_benchmark tests/benchmark_latency.cpp)
+target_link_libraries(latency_benchmark pthread)

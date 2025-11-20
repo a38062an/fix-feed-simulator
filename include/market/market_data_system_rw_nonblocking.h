@@ -1,5 +1,5 @@
-#ifndef MARKET_DATA_SYSTEM_MARKET_DATA_SYSTEM_GBM_H
-#define MARKET_DATA_SYSTEM_MARKET_DATA_SYSTEM_GBM_H
+#ifndef MARKET_DATA_SYSTEM_RW_NONBLOCKING_H
+#define MARKET_DATA_SYSTEM_RW_NONBLOCKING_H
 
 #include <vector>
 #include <memory>
@@ -17,14 +17,15 @@
 
 // --- Project Components ---
 #include <market/price_generator.h>
-#include <market/geometric_brownian_motion_generator.h>
-#include <core/blocking_ring_buffer.h>
+#include <market/random_walk_generator.h>
+// CHANGE 1: Include the Lock-Free Queue
+#include <core/nonblocking_ring_buffer.h>
 #include <network/udp_sender.h>
 #include <fix/message.h>
 
 using price = double;
 
-struct MarketTick
+struct MarketTickRW
 {
     std::string symbol;
     price bid;
@@ -35,52 +36,60 @@ struct MarketTick
 
 /**
  *
- * Cannot stress test this system as GBM messes up
- * Limited production rate of prices
+ * Non-Blocking Random Walk System
+ * - Uses LockFreeRingBuffer (SPSC)
+ * - Uses Atomic/Spin logic instead of Mutex/Sleep
  *
  */
-class MarketDataSystemGBM
+class MarketDataSystemRWNonBlocking
 {
 public:
-    MarketDataSystemGBM()
+    // CHANGE 2: Constructor accepts Interface IP to fix the Multicast Routing issue
+    MarketDataSystemRWNonBlocking(const std::string &dest_ip = "239.255.1.1", uint16_t port = 9999, const std::string &interface_ip = "127.0.0.1")
     {
-        // GBM: (startPrice, mu, sigma, dt)
-        generators_.push_back(std::make_unique<GBMGenerator<price>>(100.0, 0.1, 0.3, 0.001));
+        // Random walk: (startPrice, stepSize)
+        generators_.push_back(std::make_unique<RandomWalkGenerator<price>>(100.0, 0.01));
 
         try
         {
-            sender_ = std::make_unique<UDPMulticastSender>("239.255.1.1", 9999);
+            // CHANGE 3: Pass the interface IP to the sender
+            sender_ = std::make_unique<UDPMulticastSender>(dest_ip, port, interface_ip);
         }
         catch (const std::exception &e)
         {
             std::cerr << "Could not initialise network sender: " << e.what() << std::endl;
         }
 
-        std::cout << "MarketDataSystemGBM initialised." << std::endl;
+        std::cout << "MarketDataSystemRWNonBlocking initialised." << std::endl;
     }
 
     void start()
     {
+        std::cout << "Starting threads..." << std::endl;
         threads_.emplace_back([this]
                               { producerThread(); });
         threads_.emplace_back([this]
                               { consumerThread(); });
         threads_.emplace_back([this]
                               { monitorThread(); });
+        std::cout << "All threads running." << std::endl;
     }
 
     void stop()
     {
+        std::cout << "Stopping system threads..." << std::endl;
         running_.store(false, std::memory_order_relaxed);
+
+        // CHANGE 4: No need to push dummy tick.
+        // The consumer is polling atomic flags, it will see running_ is false immediately.
         CVMonitor_.notify_all();
-        MarketTick dummyTick;
-        SPSCTickQueue_.push(dummyTick);
     }
 
-    ~MarketDataSystemGBM()
+    ~MarketDataSystemRWNonBlocking()
     {
         if (running_.load())
             stop();
+        std::cout << "MarketDataSystemRWNonBlocking shutdown." << std::endl;
     }
 
     auto &getQueue() { return SPSCTickQueue_; }
@@ -89,7 +98,10 @@ public:
 
 private:
     std::vector<std::unique_ptr<IPriceGenerator<price>>> generators_;
-    BlockingRingBuffer<MarketTick, 4096> SPSCTickQueue_;
+
+    // CHANGE 5: Using LockFreeRingBuffer
+    LockFreeRingBuffer<MarketTickRW, 4096> SPSCTickQueue_;
+
     std::unique_ptr<UDPMulticastSender> sender_;
 
     alignas(64) std::atomic<uint64_t> ticksGenerated_{0};
@@ -101,68 +113,65 @@ private:
 
     void producerThread()
     {
-        std::cout << "Producer thread started (GBM model active with Mean-Reversion)." << std::endl;
+        std::cout << "Producer thread started (Random Walk - NonBlocking)." << std::endl;
         auto &generator = generators_[0];
 
-        // --- Mean-Reversion Constants (Numerical Stability) ---
-        // This is necessary because the price collapses due to floating point error accumulation.
-        const price TARGET_PRICE = 100.0;
-        const double REVERSION_STRENGTH = 0.00005;
+        // Pre-allocate tick to reuse memory
+        MarketTickRW tick;
+        tick.symbol = "ESZ5";
 
         while (running_.load(std::memory_order_relaxed))
         {
-            // 1. Generate new Price from GBM
             price midPrice = generator->getNextPrice();
-
-            // --- MEAN-REVERSION FORCE ---
-            // Calculate deviation from the target (100.0)
-            double deviation = TARGET_PRICE - midPrice;
-            // Apply a small push back to center the price.
-            midPrice += deviation * REVERSION_STRENGTH;
-            // --------------------------
-
-            // 2. Dynamic Spread Calculation
             double spread = 0.05 + 0.01 * ((double)std::rand() / RAND_MAX);
             spread = std::round(spread * 100.0) / 100.0;
 
-            price bidPrice = midPrice - spread / 2.0;
-            price askPrice = midPrice + spread / 2.0;
+            tick.bid = midPrice - spread / 2.0;
+            tick.ask = midPrice + spread / 2.0;
+            tick.bid_size = (std::rand() % 100) + 50;
+            tick.ask_size = tick.bid_size;
 
-            // Random volume between 50 and 150
-            int volume = (std::rand() % 100) + 50;
+            // CHANGE 6: Busy-Wait / Retry logic for Lock-Free Queue
+            // If queue is full, we keep trying until space is available.
+            while (!SPSCTickQueue_.push(tick))
+            {
+                if (!running_.load(std::memory_order_relaxed))
+                    return;
+                std::this_thread::yield(); // Be polite to the CPU
+            }
 
-            // Use the UPDATED MarketTick struct
-            MarketTick tick = {"ESZ5", bidPrice, askPrice, volume, volume};
-
-            // 2. Push to queue (Blocking if buffer is full)
-            SPSCTickQueue_.push(tick);
             ticksGenerated_.fetch_add(1, std::memory_order_relaxed);
-
-            std::this_thread::sleep_for(std::chrono::milliseconds(9));
         }
-        std::cout << "Producer thread stopped (no more data generated)." << std::endl;
+        std::cout << "Producer thread stopped." << std::endl;
     }
 
     void consumerThread()
     {
+        std::cout << "Consumer thread started" << std::endl;
         FIXMessage fixMessage("FIX.4.2");
-        MarketTick tick;
+        MarketTickRW tick;
+
         while (running_.load(std::memory_order_relaxed))
         {
+            // CHANGE 7: Non-blocking pop logic
             if (!SPSCTickQueue_.pop(tick))
             {
+                // If empty, yield so Producer can run
                 std::this_thread::yield();
                 continue;
             }
-            if (!running_.load(std::memory_order_relaxed))
-                break;
+
+            // Processing Logic
             fixMessage.clearBody();
             fixMessage.addField(35, "W").addField(55, tick.symbol).addField(268, "2");
             fixMessage.addField(269, "0").addField(270, std::format("{:.2f}", tick.bid)).addField(271, std::to_string(tick.bid_size));
             fixMessage.addField(269, "1").addField(270, std::format("{:.2f}", tick.ask)).addField(271, std::to_string(tick.ask_size));
+
             std::span<const uint8_t> completeMessage = fixMessage.finalize();
+
             if (sender_)
             {
+                // UDP Sending logic remains the same
                 bool sent = false;
                 while (!sent && running_.load(std::memory_order_relaxed))
                 {
@@ -173,12 +182,14 @@ private:
                     }
                     catch (const std::exception &)
                     {
+                        // Buffer full? Spin briefly.
                         std::this_thread::sleep_for(std::chrono::microseconds(1));
                     }
                 }
                 ticksSent_.fetch_add(1, std::memory_order_relaxed);
             }
         }
+        std::cout << "Consumer Thread has stopped." << std::endl;
     }
 
     void monitorThread()
@@ -197,4 +208,4 @@ private:
     }
 };
 
-#endif // MARKET_DATA_SYSTEM_MARKET_DATA_SYSTEM_GBM_H
+#endif // MARKET_DATA_SYSTEM_RW_NONBLOCKING_H

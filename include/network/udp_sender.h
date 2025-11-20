@@ -22,7 +22,7 @@ class UDPMulticastSender
 {
 
 public:
-    UDPMulticastSender(const std::string &multicast_ip, uint16_t port)
+    UDPMulticastSender(const std::string &multicast_ip, uint16_t port, const std::string &interface_ip = "127.0.0.1")
         // 1. Create a UDP socket
         // AFINET = IPv4, SOCK_DGRAM = UDP
         : sockfd_{socket(AF_INET, SOCK_DGRAM, 0)}
@@ -49,6 +49,20 @@ public:
         {
             std::cerr << "Warning: Could not increase socket buffer size. "
                       << "You might see packet drops under load." << std::endl;
+        }
+
+        // new change (interface mapping)
+        struct in_addr localInterface;
+        if (inet_pton(AF_INET, interface_ip.c_str(), &localInterface) <= 0)
+        {
+            close(sockfd_);
+            throw std::runtime_error("Invalid interface IP");
+        }
+
+        if (setsockopt(sockfd_, IPPROTO_IP, IP_MULTICAST_IF, (char *)&localInterface, sizeof(localInterface)) < 0)
+        {
+            close(sockfd_);
+            throw std::runtime_error("Failed to set IP_MULTICAST_IF");
         }
 
         // 3. Setup the destination address structure (UPDATING PROPERTIES OF addr_)

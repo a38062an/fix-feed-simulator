@@ -92,7 +92,7 @@ def parse_fix_message(raw_bytes):
 
 
 # ------------------------------------------------------------
-# Network receiver thread
+# Network receiver thread (FIXED FOR MACOS LOOPBACK)
 # ------------------------------------------------------------
 def network_receive_thread():
     """
@@ -101,24 +101,57 @@ def network_receive_thread():
     """
     global packet_counter, current_mid_price, running_flag
 
+    # 1. Create the UDP Socket
     sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM, socket.IPPROTO_UDP)
-    sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+
+    # 2. Set Reuse Options (Critical for restarting script without 'Address already in use')
+    try:
+        sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        if hasattr(socket, "SO_REUSEPORT"):
+            sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEPORT, 1)
+    except AttributeError:
+        pass
+
+    # 3. Bind to the Port
+    # On macOS, we bind to "" (INADDR_ANY) to catch traffic from all interfaces
     try:
         sock.bind(("", MULTICAST_PORT))
-    except Exception:
-        # On some systems binding to the multicast group is necessary
-        sock.bind((MULTICAST_GROUP, MULTICAST_PORT))
+    except Exception as e:
+        print(f"Error binding to port {MULTICAST_PORT}: {e}")
+        return
 
-    mreq = struct.pack("4sl", socket.inet_aton(MULTICAST_GROUP), socket.INADDR_ANY)
-    sock.setsockopt(socket.IPPROTO_IP, socket.IP_ADD_MEMBERSHIP, mreq)
+    # 4. Join the Multicast Group (THE FIX)
+    # We must tell the OS to join the group specifically on the LOOPBACK interface (127.0.0.1)
+    # because that is where the C++ code is sending the data.
+    
+    group_bin = socket.inet_aton(MULTICAST_GROUP)
+    iface_bin = socket.inet_aton("127.0.0.1") # Explicitly use Loopback
+    
+    # struct.pack("4s4s", ...) means:
+    # 4s = 4 bytes for the Group IP
+    # 4s = 4 bytes for the Interface IP
+    mreq = struct.pack("4s4s", group_bin, iface_bin)
 
-    print(f"Listening for market feed on {MULTICAST_GROUP}:{MULTICAST_PORT}...")
+    try:
+        sock.setsockopt(socket.IPPROTO_IP, socket.IP_ADD_MEMBERSHIP, mreq)
+    except Exception as e:
+        print(f"Failed to join multicast group: {e}")
+        return
 
+    print(f"Listening for market feed on {MULTICAST_GROUP}:{MULTICAST_PORT} via Loopback (127.0.0.1)...")
+
+    # 5. Receive Loop
     while running_flag:
         try:
-            raw = sock.recv(RECEIVE_BUFFER_SIZE)
-            packet_counter += 1
+            # Set a timeout so we can check running_flag periodically (allows Ctrl+C to work)
+            sock.settimeout(1.0) 
+            
+            try:
+                raw = sock.recv(RECEIVE_BUFFER_SIZE)
+            except socket.timeout:
+                continue # Loop back and check running_flag
 
+            packet_counter += 1
             parsed = parse_fix_message(raw)
 
             if "mid_price" in parsed:
@@ -142,7 +175,8 @@ def network_receive_thread():
         except Exception as exc:
             print(f"Socket error: {exc}")
             break
-
+    
+    sock.close()
 
 # ------------------------------------------------------------
 # Metrics updater thread
